@@ -41,8 +41,17 @@ type TelegramMessage struct {
 	ChatID          string `json:"chat_id"`
 }
 
+type GotifyMessage struct {
+	ThresholdStatus bool   `json:"threshold_status"`
+	RatioStatus     bool   `json:"ratio_status"`
+	URL             string `json:"url"`
+	AppToken        string `json:"app_token"`
+}
+
 type Message struct {
+	Service  string          `json:"service"`
 	Telegram TelegramMessage `json:"telegram"`
+	Gotify   GotifyMessage   `json:"gotify"`
 }
 
 type Config struct {
@@ -136,10 +145,60 @@ func checkReset(config *Config) bool {
 	return false
 }
 
+// 发送统计摘要信息
+func sendStatisticsSummary(config *Config) error {
+	// 计算总流量（GB）
+	receiveGB := float64(config.Statistics.TotalReceive) / bytesToGB
+	transmitGB := float64(config.Statistics.TotalTransmit) / bytesToGB
+	totalGB := receiveGB + transmitGB
+
+	// 计算使用率
+	var usagePercent float64
+	categoryUsage := "未知"
+
+	switch config.Comparison.Category {
+	case "download":
+		usagePercent = receiveGB / config.Comparison.Limit * 100
+		categoryUsage = fmt.Sprintf("下载流量：%.2f GB (%.1f%%)", receiveGB, usagePercent)
+	case "upload":
+		usagePercent = transmitGB / config.Comparison.Limit * 100
+		categoryUsage = fmt.Sprintf("上传流量：%.2f GB (%.1f%%)", transmitGB, usagePercent)
+	case "upload+download":
+		usagePercent = totalGB / config.Comparison.Limit * 100
+		categoryUsage = fmt.Sprintf("总流量：%.2f GB (%.1f%%)", totalGB, usagePercent)
+	case "anymax":
+		maxGB := max(receiveGB, transmitGB)
+		usagePercent = maxGB / config.Comparison.Limit * 100
+		categoryUsage = fmt.Sprintf("最大单向流量：%.2f GB (%.1f%%)", maxGB, usagePercent)
+	}
+
+	// 上次重置时间
+	lastResetTime, _ := time.Parse("2006-01-02", config.Statistics.LastReset)
+
+	// 构建消息
+	message := fmt.Sprintf(
+		"周期统计摘要 (%s 至今):\n\n下载流量：%.2f GB\n上传流量：%.2f GB\n合计流量：%.2f GB\n\n计费方式：%s\n限额：%.2f GB\n%s",
+		lastResetTime.Format("2006-01-02"),
+		receiveGB,
+		transmitGB,
+		totalGB,
+		config.Comparison.Category,
+		config.Comparison.Limit,
+		categoryUsage,
+	)
+
+	// 发送消息
+	return sendMessage(config, message)
+}
+
 // Reset statistics and also reset the Telegram status flags
-// func resetStatistics(config *Config) {
 func resetStatistics(config *Config, configFilePath string) {
-	//fmt.Println("Resetting statistics and Telegram statuses for new month period")
+	// 在重置之前发送统计摘要
+	err := sendStatisticsSummary(config)
+	if err != nil {
+		fmt.Printf("Failed to send statistics summary: %v\n", err)
+	}
+
 	// Reset statistics
 	config.Statistics.TotalReceive = 0
 	config.Statistics.TotalTransmit = 0
@@ -151,9 +210,12 @@ func resetStatistics(config *Config, configFilePath string) {
 	config.Message.Telegram.ThresholdStatus = false
 	config.Message.Telegram.RatioStatus = false
 
+	// Reset Gotify status flags
+	config.Message.Gotify.ThresholdStatus = false
+	config.Message.Gotify.RatioStatus = false
+
 	// Save the reset config
-	//err := saveConfig("config.json", *config)
-	err := saveConfig(configFilePath, *config)
+	err = saveConfig(configFilePath, *config)
 	if err != nil {
 		fmt.Printf("Failed to save config after reset in resetStatistics: %v\n", err)
 	}
@@ -177,8 +239,68 @@ func sendTelegramMessage(token, chatID, message, device string) error {
 	return nil
 }
 
+// Send a message to Gotify server
+func sendGotifyMessage(url, appToken, message, device string) error {
+	apiURL := fmt.Sprintf("%s/message", strings.TrimRight(url, "/"))
+
+	body := map[string]string{
+		"title":    fmt.Sprintf("Network Monitor: %s", device),
+		"message":  message,
+		"priority": "5",
+	}
+	jsonBody, _ := json.Marshal(body)
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request to Gotify: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Gotify-Key", appToken)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send message to Gotify: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("got error status from Gotify: %s", resp.Status)
+	}
+
+	return nil
+}
+
+// Send message using the configured service
+func sendMessage(config *Config, message string) error {
+	switch config.Message.Service {
+	case "telegram":
+		return sendTelegramMessage(
+			config.Message.Telegram.Token,
+			config.Message.Telegram.ChatID,
+			message,
+			config.Device,
+		)
+	case "gotify":
+		return sendGotifyMessage(
+			config.Message.Gotify.URL,
+			config.Message.Gotify.AppToken,
+			message,
+			config.Device,
+		)
+	default:
+		return fmt.Errorf("unknown message service: %s", config.Message.Service)
+	}
+}
+
+// Check if a command exists in the system
+func commandExists(cmd string) bool {
+	_, err := exec.LookPath(cmd)
+	return err == nil
+}
+
 // Perform comparison based on category and thresholds
-// func performComparison(config *Config) error {
 func performComparison(config *Config, configFilePath string) error {
 	var valueInGB float64
 
@@ -189,6 +311,11 @@ func performComparison(config *Config, configFilePath string) error {
 		valueInGB = float64(config.Statistics.TotalTransmit) / bytesToGB
 	case "upload+download":
 		valueInGB = float64(config.Statistics.TotalReceive+config.Statistics.TotalTransmit) / bytesToGB
+	case "anymax":
+		// 选择上传和下载中较大的值
+		receiveGB := float64(config.Statistics.TotalReceive) / bytesToGB
+		transmitGB := float64(config.Statistics.TotalTransmit) / bytesToGB
+		valueInGB = max(receiveGB, transmitGB)
 	default:
 		return fmt.Errorf("invalid comparison category: %s", config.Comparison.Category)
 	}
@@ -197,48 +324,68 @@ func performComparison(config *Config, configFilePath string) error {
 	ratioLimit := config.Comparison.Limit * config.Comparison.Ratio
 
 	// Compare with threshold and send message if needed
-	if valueInGB >= thresholdLimit && !config.Message.Telegram.ThresholdStatus {
-		//fmt.Println("大于阈值，发送消息")
+	var thresholdStatus, ratioStatus bool
+	if config.Message.Service == "telegram" {
+		thresholdStatus = config.Message.Telegram.ThresholdStatus
+		ratioStatus = config.Message.Telegram.RatioStatus
+	} else if config.Message.Service == "gotify" {
+		thresholdStatus = config.Message.Gotify.ThresholdStatus
+		ratioStatus = config.Message.Gotify.RatioStatus
+	}
+
+	// Compare with threshold and send message if needed
+	if valueInGB >= thresholdLimit && !thresholdStatus {
 		message := fmt.Sprintf("流量提醒：当前使用量为 %.2f GB，超过了设置的%.0f%%阈值", valueInGB, config.Comparison.Threshold*100)
-		err := sendTelegramMessage(config.Message.Telegram.Token, config.Message.Telegram.ChatID, message, config.Device)
+		err := sendMessage(config, message)
 		if err != nil {
-			fmt.Printf("Failed to compare thresholdLimit: %v\n", err)
+			fmt.Printf("Failed to send threshold message: %v\n", err)
 		} else {
-			//fmt.Println("阈值发送成功，修改状态")
-			config.Message.Telegram.ThresholdStatus = true // Mark threshold status as true after sending
+			// Update status based on selected service
+			if config.Message.Service == "telegram" {
+				config.Message.Telegram.ThresholdStatus = true
+			} else if config.Message.Service == "gotify" {
+				config.Message.Gotify.ThresholdStatus = true
+			}
 
 			// Save the updated config to the file
-			//err = saveConfig("config.json", *config)
 			err = saveConfig(configFilePath, *config)
 			if err != nil {
-				fmt.Printf("Failed to save config in thresholdLimit: %v\n", err)
+				fmt.Printf("Failed to save config after threshold message: %v\n", err)
 			}
 		}
 	}
 
 	// Check for shutdown warning and send message if needed
-	if valueInGB >= ratioLimit && !config.Message.Telegram.RatioStatus {
-		//fmt.Println("大于比率，发送消息")
+	if valueInGB >= ratioLimit && !ratioStatus {
 		message := fmt.Sprintf("关机警告：当前使用量 %.2f GB，超过了限制的%.0f%%，即将关机！", valueInGB, config.Comparison.Ratio*100)
-		err := sendTelegramMessage(config.Message.Telegram.Token, config.Message.Telegram.ChatID, message, config.Device)
+		err := sendMessage(config, message)
 		if err != nil {
-			fmt.Printf("Failed to compare ratioLimit: %v\n", err)
+			fmt.Printf("Failed to send ratio warning message: %v\n", err)
 		} else {
-			//fmt.Println("警告发送成功，修改状态")
-			config.Message.Telegram.RatioStatus = true // Mark ratio status as true after sending
+			// Update status based on selected service
+			if config.Message.Service == "telegram" {
+				config.Message.Telegram.RatioStatus = true
+			} else if config.Message.Service == "gotify" {
+				config.Message.Gotify.RatioStatus = true
+			}
 
 			// Save the updated config to the file
-			//err = saveConfig("config.json", *config)
 			err = saveConfig(configFilePath, *config)
 			if err != nil {
-				fmt.Printf("Failed to save config in ratioLimit: %v\n", err)
+				fmt.Printf("Failed to save config after ratio warning: %v\n", err)
 			}
 
 			// Wait for 30 seconds before shutting down
 			time.Sleep(30 * time.Second)
 
-			// Execute shutdown command
-			cmd := exec.Command("shutdown", "-h", "now")
+			// Check if shutdown command exists, otherwise use poweroff
+			var cmd *exec.Cmd
+			if commandExists("shutdown") {
+				cmd = exec.Command("shutdown", "-h", "now")
+			} else {
+				cmd = exec.Command("poweroff")
+			}
+
 			err := cmd.Run()
 			if err != nil {
 				fmt.Printf("Failed to execute shutdown command: %v\n", err)
