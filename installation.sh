@@ -133,9 +133,33 @@ if [ "$choice" != "2" ]; then
     read -p "请输入月流量上限（单位：GB）：" monthly_traffic
     read -p "请输入流量提示比例，例如0.85（即85%时发出提示）：" traffic_threshold
     read -p "请输入流量警告比例，例如0.95（即95%时发出警告并关机）：" traffic_ratio
-    read -p "请输入Telegram机器人的Token：" telegram_bot_token
-    read -p "请输入Telegram的Chat ID：" telegram_chat_id
+    
+    # 选择消息服务
+    echo "请选择消息通知服务："
+    echo "1. Telegram"
+    echo "2. Gotify"
+    read -p "请输入选项（1/2）：" message_service_choice
+    
+    case $message_service_choice in
+        1) 
+            message_service="telegram"
+            read -p "请输入Telegram机器人的Token：" telegram_bot_token
+            read -p "请输入Telegram的Chat ID：" telegram_chat_id
+            ;;
+        2) 
+            message_service="gotify"
+            read -p "请输入Gotify服务器URL（例如：https://gotify.example.com）：" gotify_url
+            read -p "请输入Gotify应用令牌：" gotify_app_token
+            ;;
+        *) 
+            echo "无效的选项，默认使用Telegram"
+            message_service="telegram"
+            read -p "请输入Telegram机器人的Token：" telegram_bot_token
+            read -p "请输入Telegram的Chat ID：" telegram_chat_id
+            ;;
+    esac
 
+    # 创建配置文件
     cat <<EOL > /opt/NetMonitor/config.json
 {
     "device": "$device_name",
@@ -156,11 +180,18 @@ if [ "$choice" != "2" ]; then
         "ratio": $traffic_ratio
     },
     "message": {
+        "service": "$message_service",
         "telegram": {
             "threshold_status": false,
             "ratio_status": false,
-            "token": "$telegram_bot_token",
-            "chat_id": "$telegram_chat_id"
+            "token": "${telegram_bot_token:-}",
+            "chat_id": "${telegram_chat_id:-}"
+        },
+        "gotify": {
+            "threshold_status": false,
+            "ratio_status": false,
+            "url": "${gotify_url:-}",
+            "app_token": "${gotify_app_token:-}"
         }
     }
 }
