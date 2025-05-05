@@ -1,11 +1,11 @@
 # netMonitor
-一款基于Golang的Linux流量统计与提醒工具，支持telegram消息和自动关机。
+一款基于Golang的Linux流量统计与提醒工具，支持telegram消息、Gotify消息和自动关机。
 
 
 依赖：
 - Linux系统
 - root权限
-- 一个telegram机器人
+- 一个telegram机器人或Gotify服务器
 
 
 
@@ -20,13 +20,29 @@
 wget -qO- https://raw.githubusercontent.com/nodeseeker/netMonitor/main/installation.sh -O installation.sh && chmod +x installation.sh && ./installation.sh
 ```
 
+安装脚本支持以下操作：
+1. 删除并重新安装：清除现有的安装并重新安装程序
+2. 升级并保留配置文件：只更新程序文件，保留原有的配置
+3. 退出安装：取消安装过程
+4. 删除NetMonitor：完全移除已安装的程序
+
 ### 消息提醒示例
 
-telegram的机器人将发生以下提示消息：
+支持两种消息服务，根据配置选择使用：
+
+#### Telegram示例
 
 ```
 [test.example.com]流量提醒：当前使用量为 170.00 GB，超过了设置的85%阈值
 [test.example.com]关机警告：当前使用量 190 GB，超过了限制的95%，即将关机！
+```
+
+#### Gotify示例
+
+标题和内容分别为：
+```
+标题: Network Monitor: test.example.com
+消息: 流量提醒：当前使用量为 170.00 GB，超过了设置的85%阈值
 ```
 
 ### 运行情况示例
@@ -74,12 +90,26 @@ Sep 08 21:02:50 test.example.com systemd[1]: Started netmonitor.service - Networ
 
 5. `statistics`的子项是以字节`bytes`为单位的流量统计信息，首次配置的时候，将`last_reset`改为上次流量充值时间，采用`yyyy-mm-dd`格式，其他项为0，不需要改动。
 
-6. `comparison`中的`category`有三个选项。其一，`upload`为单向统计上传流量；其二，`download`为单向统计下载流量；其三，`upload+download`为双向统计流量。实际使用哪个，依据商家/机房/自己的流量统计需求填写。`limit`是设置的流量限制，单位为GB；`threshold`是发消息提醒的阈值，以配置为例，当流量达到200×0.85=170GB的时候，会通过电报发送消息提醒；`ratio`为自动关系的阈值，以配置为例，当流量达到200×0.95=190GB的时候，系统会自动关机，并在关机的前30秒发送关机提醒。
+6. `comparison`中的`category`有四个选项：
+   - `upload`：单向统计上传流量
+   - `download`：单向统计下载流量
+   - `upload+download`：双向统计总流量
+   - `anymax`：统计上传和下载中的最大值
 
-7. `nessage`中的`token`和`chat_id`为telegram机器人的密钥和聊天ID，按照实际情况填写。其他的选项，默认false即可，会在月周期之后自动重置，不需要手动修改。
+   `limit`是设置的流量限制，单位为GB；`threshold`是发消息提醒的阈值，以配置为例，当流量达到200×0.85=170GB的时候，会发送消息提醒；`ratio`为自动关机的阈值，以配置为例，当流量达到200×0.95=190GB的时候，系统会自动关机，并在关机的前30秒发送关机提醒。
 
+7. `message`中有以下配置项:
+   - `service`: 指定使用的消息服务，可选值为`telegram`或`gotify`
+   - `telegram`: Telegram相关配置
+     - `token`: Telegram机器人的API令牌
+     - `chat_id`: 接收消息的聊天ID
+   - `gotify`: Gotify相关配置
+     - `url`: Gotify服务器地址，如`https://gotify.example.com`
+     - `app_token`: Gotify应用程序令牌
 
+   其他的选项，默认false即可，会在月周期之后自动重置，不需要手动修改。
 
+配置文件示例：
 ```
 {
   "device": "test.example.com",
@@ -94,23 +124,28 @@ Sep 08 21:02:50 test.example.com systemd[1]: Started netmonitor.service - Networ
     "last_reset": "2024-08-09"
   },
   "comparison": {
-    "category": "upload+download",
+    "category": "anymax",
     "limit": 200,
     "threshold": 0.85,
     "ratio": 0.95
   },
   "message": {
+    "service": "telegram",
     "telegram": {
       "threshold_status": false,
       "ratio_status": false,
       "token": "1234567890:ASDFGHJKL-QWERTYUIOP",
       "chat_id": "9876543210"
+    },
+    "gotify": {
+      "threshold_status": false,
+      "ratio_status": false,
+      "url": "https://gotify.example.com",
+      "app_token": "ABCDEFGHIJKLMN"
     }
   }
 }
 ```
-
-
 
 ## 常见问题
 
