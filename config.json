@@ -17,11 +17,18 @@
     "ratio": 0.95
   },
   "message": {
+    "service": "telegram",
     "telegram": {
       "threshold_status": false,
       "ratio_status": false,
       "token": "1234567890:ASDFGHJKLQWERTYUIOP",
       "chat_id": "1234567890"
+    },
+    "gotify": {
+      "threshold_status": false,
+      "ratio_status": false,
+      "url": "https://gotify.example.com",
+      "app_token": "ABCDEFGHIJKLMN"
     }
   }
 }
